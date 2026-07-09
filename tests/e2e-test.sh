@@ -337,11 +337,16 @@ test_memory_system() {
   local ns="e2e-test-$(date +%s)"
   local api="http://127.0.0.1:8233/api"
 
-  # M1 — 创建初始记忆
+  # M1 — 先创建分类父节点，再创建子节点
+  # 第一步：创建 identity 分类
+  curl -s -X POST "${api}/browse/node?namespace=${ns}" \
+    -H "Content-Type: application/json" \
+    -d '{"parent_path":"","content":"","priority":0,"title":"identity","domain":"core","disclosure":"public"}' > /dev/null 2>&1
+  # 第二步：在 identity 下创建具体记忆
   local r1
   r1=$(curl -s -X POST "${api}/browse/node?namespace=${ns}" \
     -H "Content-Type: application/json" \
-    -d '{"parent_path":"identity","content":"【self】我是测试角色","priority":10,"title":"self_test","domain":"core"}')
+    -d '{"parent_path":"identity","content":"【self】我是测试角色","priority":10,"title":"self_test","domain":"core","disclosure":"public"}')
   if echo "$r1" | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get('success') else 1)" 2>/dev/null; then
     green "  ✅ M1: 写入初始记忆"
     ((PASS++))
@@ -360,10 +365,12 @@ test_memory_system() {
     red "  ❌ M2: $(echo "$r2"|head -c 100)"; ((FAIL++))
   fi
 
-  # M3 — 搜索
+  # M3 — 搜索（URL编码中文）
   sleep 1
+  local encoded_q
+  encoded_q=$(python3 -c "import urllib.parse; print(urllib.parse.quote('测试'))" 2>/dev/null)
   local r3
-  r3=$(curl -s "${api}/browse/search?namespace=${ns}&q=测试&limit=5")
+  r3=$(curl -s "${api}/browse/search?namespace=${ns}&q=${encoded_q}&limit=5")
   if echo "$r3" | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if 'results' in d else 1)" 2>/dev/null; then
     green "  ✅ M3: 关键词搜索"; ((PASS++))
   else
@@ -379,11 +386,14 @@ test_memory_system() {
     red "  ❌ M4: $(echo "$r4"|head -c 100)"; ((FAIL++))
   fi
 
-  # M5 — 写入新记忆
+  # M5 — 写入新记忆（先建 events 父分类）
+  curl -s -X POST "${api}/browse/node?namespace=${ns}" \
+    -H "Content-Type: application/json" \
+    -d '{"parent_path":"","content":"","priority":0,"title":"events","domain":"core","disclosure":"public"}' > /dev/null 2>&1
   local r5
   r5=$(curl -s -X POST "${api}/browse/node?namespace=${ns}" \
     -H "Content-Type: application/json" \
-    -d '{"parent_path":"events","content":"【事件】测试事件","priority":3,"title":"evt","domain":"core"}')
+    -d '{"parent_path":"events","content":"【事件】测试事件","priority":3,"title":"evt","domain":"core","disclosure":"public"}')
   if echo "$r5" | python3 -c "import json,sys; d=json.load(sys.stdin); sys.exit(0 if d.get('success') else 1)" 2>/dev/null; then
     green "  ✅ M5: 写入新记忆"; ((PASS++))
   else
