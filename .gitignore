@@ -1,8 +1,12 @@
-# 用户数据（故事包）
+# 运行时的用户数据
 pi-characters/
 
+# 开发期使用的 skills（运行时不需要）
+.agents/
+skills-lock.json
+
 # 外部依赖（独立 git 仓库）
-tavern-cards/
+/tavern-cards
 
 # 解包缓存
 fate-card-unpack/
