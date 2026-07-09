@@ -1,0 +1,24 @@
+# 用户数据（故事包）
+pi-characters/
+
+# 外部依赖（独立 git 仓库）
+tavern-cards/
+
+# 解包缓存
+fate-card-unpack/
+tmp/
+
+# 二进制文件
+*.png
+*.jpg
+*.jpeg
+
+# 临时文件
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# 日志
+*.log
