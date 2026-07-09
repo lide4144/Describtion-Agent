@@ -90,7 +90,6 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
-      // 检查故事包是否存在
       const storyData = loadStoryYaml(storyName);
       if (!storyData) {
         ctx.ui.notify(`故事包 "${storyName}" 不存在。可用: /stories list`, "error");
@@ -99,7 +98,6 @@ export default function (pi: ExtensionAPI) {
 
       const gmData = loadGmYaml(storyName);
 
-      // 如果已经在其他故事中，先退出
       if (isGmMode && activeStoryName) {
         await stopAllSessions(activeCharacters);
         activeCharacters.clear();
@@ -108,15 +106,69 @@ export default function (pi: ExtensionAPI) {
       activeStoryName = storyName;
       isGmMode = true;
 
+      // 自动启动所有角色
+      const charList = storyData.characters || [];
+      for (const c of charList) {
+        try {
+          await startCharacterSession(storyName, c.name, STORIES_DIR, activeCharacters);
+        } catch (e: any) {
+          console.error(`启动角色 ${c.name} 失败:`, e.message);
+        }
+      }
+
       // 注册 GM 工具
       registerGmTools(pi, storyName, activeCharacters, STORIES_DIR);
 
-      // 构造 GM 模式提示
-      const charList = (storyData.characters || [])
-        .map((c: any) => `  - ${c.name} (${c.role})`)
-        .join("\n");
+      // 构造 GM 系统提示 — 注入世界观和叙事风格
+      const worldDesc = (storyData.world || "").slice(0, 2000);
+      const gmStyle = gmData?.narrative?.style || "自然的叙事风格";
+      const gmTone = gmData?.narrative?.tone || "中立";
 
-      ctx.ui.notify(`进入 GM 模式：${storyName}`, "info");
+      const gmSystemPrompt = `你是这个故事的 GM（Game Master）。你是用户体验故事的窗口。
+
+## 世界观
+${worldDesc}
+
+## 叙事风格
+${gmStyle}
+
+## 叙事基调
+${gmTone}
+
+## 你的职责
+- 用户只跟你对话，你负责推进故事
+- 用 start-char 启动角色（已自动启动）
+- 用 new-turn 广播场景给角色，收集他们的意图
+- 用 observe 查看角色状态
+- 用户是隐形的——角色不知道用户存在
+- 用 console list 查看活跃角色
+
+## 新手指南
+第一次使用 GM 模式？可以这样开始：
+1. 用 console list 查看已经自动启动的角色
+2. 用 new-turn 广播一个场景给角色
+3. 阅读判定 agent 返回的结果
+4. 呈现给用户，继续下一轮`;
+
+      // 注入 GM 系统提示到当前会话
+      pi.sendMessage({
+        customType: "gm-context",
+        content: gmSystemPrompt,
+        display: false,
+      });
+
+      // 构造 GM 欢迎信息
+      const charNames = charList.map((c: any) => c.name).join(", ");
+      const welcomeMsg = `📖 进入故事：${storyName}\n` +
+        `🌍 ${storyData.world?.slice(0, 100) || ""}...\n` +
+        `🎭 角色已就绪：${charNames || "（无角色）"}\n\n` +
+        `你现在是 GM。你可以随时：\n` +
+        `- 用 new-turn 布置场景推进故事\n` +
+        `- 用 observe 查看角色状态\n` +
+        `- 直接跟我描述你想看到的场景\n\n` +
+        `想从哪里开始？`;
+
+      ctx.ui.notify(welcomeMsg, "info");
     },
   });
 
