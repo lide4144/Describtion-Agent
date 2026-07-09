@@ -337,7 +337,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "save_story",
     label: "Save Story Pack",
-    description: "创建故事包的基础目录和元信息文件（story.yaml + gm.yaml）。调用此工具后再用 save_character 逐个添加角色。",
+    description: "创建故事包的基础目录和元信息文件（story.yaml + gm.yaml）。支持大纲（outline）和开场白（opening）。调用此工具后再用 save_character 逐个添加角色。",
     parameters: Type.Object({
       storyName: Type.String({ description: "故事名，将作为目录名（如 卫宫士郎-日常沙盒）" }),
       worldDescription: Type.String({ description: "共享世界观——所有角色普遍知道的世界设定" }),
@@ -348,6 +348,12 @@ export default function (pi: ExtensionAPI) {
       })),
       cognitiveBoundaries: Type.Optional(Type.String({
         description: "认知边界——哪些信息是角色普遍知道的（字符串描述）。可选。",
+      })),
+      outline: Type.Optional(Type.String({
+        description: "故事大纲，JSON 数组字符串。每项 {phase, description, direction, scenes?}。可选。",
+      })),
+      opening: Type.Optional(Type.String({
+        description: "开场白——第一轮 env 场景描述。可选。",
       })),
     }),
 
@@ -369,14 +375,22 @@ export default function (pi: ExtensionAPI) {
           try { npcs = JSON.parse(params.npcs); } catch { /* ignore */ }
         }
 
+        // 解析大纲
+        let outline: Array<{phase: string; description: string; direction: string; scenes?: string[]}> = [];
+        if (params.outline) {
+          try { outline = JSON.parse(params.outline); } catch { /* ignore */ }
+        }
+
         // ── 写入 story.yaml ──────────────────────────────────
-        const storyData = {
+        const storyData: any = {
           name: params.storyName,
           createdAt: new Date().toISOString(),
           world: params.worldDescription,
           cognitiveBoundaries: params.cognitiveBoundaries || "",
           characters: [] as Array<{name: string; role: string; blueprint: string}>,
         };
+        if (outline.length > 0) storyData.outline = outline;
+        if (params.opening) storyData.opening = params.opening;
         fs.writeFileSync(
           path.join(storyDir, "story.yaml"),
           JSON.stringify(storyData, null, 2),

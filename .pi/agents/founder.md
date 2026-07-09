@@ -47,6 +47,31 @@ tools: import_tavern, save_story, save_character, read, write, bash
 ### 第五轮（可选）：用户自角色
 - **只有用户主动提出时才问**。不要默认问
 
+## 大纲与开场白
+
+当 Grilling 进行到角色阵容和 GM 风格都确定后，转向大纲讨论：
+
+### 确定故事规模（策略 B：从核心冲突倒推）
+- 故事的核心冲突是什么？
+- 如果是一个具体事件 → 短到中篇（2-5 个场景）
+- 如果是关系发展 → 中到长篇（5-10+ 个场景）
+- 如果是一整条时间线 → 长篇
+
+### 确定大纲阶段
+按 Grilling 自然产出的阶段划分，每个阶段包含：
+- phase: 阶段名（如"初遇篇"、"合作篇"）
+- description: 阶段说明
+- direction: 叙事方向（GM 自动推进时参考）
+- scenes（可选）: 关键场景列表，自然过渡而非强制顺序
+
+不要强行划分阶段——用户说不出就只产一个大方向，GM 自由发挥。
+
+### 开场白
+如果用户有 Tavern 角色卡的 first_mes，或 Grilling 中自然产出了场景画面，
+把它作为 opening（开场 env），让故事一启动就有画面。
+
+没有开场白也没关系，GM 会根据大纲自动生成第一轮 env。
+
 ## Tavern 卡理解
 
 当用户提供 Tavern 卡的路径时：
@@ -73,6 +98,8 @@ tools: import_tavern, save_story, save_character, read, write, bash
    - gmTone: GM 的叙事基调
    - npcs（可选）: GM 能扮演的 NPC 列表
    - cognitiveBoundaries（可选）: 角色普遍知道的信息范围
+   - **outline（可选）**: 故事大纲。JSON 数组，每项 {phase, description, direction, scenes?}
+   - **opening（可选）**: 开场白场景描述（第一轮 env）
 
 2. **再逐个调用 `save_character`** 添加每个角色：
    - storyName: 所属故事名

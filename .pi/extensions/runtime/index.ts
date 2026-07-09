@@ -119,10 +119,27 @@ export default function (pi: ExtensionAPI) {
       // 注册 GM 工具
       registerGmTools(pi, storyName, activeCharacters, STORIES_DIR);
 
-      // 构造 GM 系统提示 — 注入世界观和叙事风格
+      // 构造 GM 系统提示 — 注入世界观、大纲、叙事风格
       const worldDesc = (storyData.world || "").slice(0, 2000);
       const gmStyle = gmData?.narrative?.style || "自然的叙事风格";
       const gmTone = gmData?.narrative?.tone || "中立";
+
+      // 注入大纲
+      const outline = storyData.outline || [];
+      let outlinePrompt = "";
+      if (outline.length > 0) {
+        outlinePrompt = "\n## 故事大纲\n";
+        for (const phase of outline) {
+          outlinePrompt += `- ${phase.phase}：${phase.description}\n`;
+          outlinePrompt += `  方向：${phase.direction}\n`;
+          if (phase.scenes?.length) {
+            outlinePrompt += `  场景：${phase.scenes.join(" → ")}\n`;
+          }
+        }
+      }
+
+      // 注入开场白
+      const opening = storyData.opening || "";
 
       const gmSystemPrompt = `你是这个故事的 GM（Game Master）。你是用户体验故事的窗口。
 
@@ -133,7 +150,7 @@ ${worldDesc}
 ${gmStyle}
 
 ## 叙事基调
-${gmTone}
+${gmTone}${outlinePrompt}
 
 ## 你的职责
 - 用户只跟你对话，你负责推进故事
@@ -143,12 +160,23 @@ ${gmTone}
 - 用户是隐形的——角色不知道用户存在
 - 用 console list 查看活跃角色
 
-## 新手指南
-第一次使用 GM 模式？可以这样开始：
-1. 用 console list 查看已经自动启动的角色
-2. 用 new-turn 广播一个场景给角色
-3. 阅读判定 agent 返回的结果
-4. 呈现给用户，继续下一轮`;
+## 自动推进
+- 每次 new-turn 返回结果后，你判断是否自动推进下一轮
+- 如果角色还在互动中（有对话/动作进行中）→ 自动调用 new-turn 继续
+- 如果到了自然停顿（角色离开、沉默、场景切换）→ 参考大纲
+  - 大纲还有下一场 → 自动推进下一场景
+  - 大纲阶段结束 → 输出给用户等待指令
+- 用户说"继续"→ 恢复自动推进
+- 用户随时可以override："停，我想看……"→ 你按用户说的即兴安排
+- 你可以多次调用 new-turn 连续推进，每次用上轮结果作为下一轮 env 的素材
+
+## 故事日志
+每次输出叙事后，用 write 工具把本轮叙事追加到 pi-characters/${storyName}/story-log.md，格式：
+## 第{X}轮
+叙事内容
+
+---\n
+开场白可以有多轮（如角色自我介绍、场景展开等），但不要一次输出太多，保持节奏感。`;
 
       // 注入 GM 系统提示到当前会话
       pi.sendMessage({
@@ -159,14 +187,15 @@ ${gmTone}
 
       // 构造 GM 欢迎信息
       const charNames = charList.map((c: any) => c.name).join(", ");
-      const welcomeMsg = `📖 进入故事：${storyName}\n` +
+      let welcomeMsg = `📖 进入故事：${storyName}\n` +
         `🌍 ${storyData.world?.slice(0, 100) || ""}...\n` +
-        `🎭 角色已就绪：${charNames || "（无角色）"}\n\n` +
-        `你现在是 GM。你可以随时：\n` +
-        `- 用 new-turn 布置场景推进故事\n` +
-        `- 用 observe 查看角色状态\n` +
-        `- 直接跟我描述你想看到的场景\n\n` +
-        `想从哪里开始？`;
+        `🎭 角色已就绪：${charNames || "（无角色）"}\n`;
+
+      if (opening) {
+        welcomeMsg += `\n📜 开场白：${opening}\n\n要开始吗？`;
+      } else {
+        welcomeMsg += `\n你现在是 GM。随时可以开始推进故事。`;
+      }
 
       ctx.ui.notify(welcomeMsg, "info");
     },
