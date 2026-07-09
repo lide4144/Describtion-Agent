@@ -167,9 +167,9 @@ ${gmTone}${outlinePrompt}
 
 ## 工作流程
 1. 理解用户意图后，调 new-turn 广播场景
-2. 阅读角色返回的原始意图
+2. 阅读角色返回的原始意图（new-turn 的输出就是 [角色名] act/thought: 内容）
 3. 如有冲突意图，调 judge 仲裁
-4. 调 write-story（传场景、方向要点、角色意图、上轮叙事）→ 得到正史
+4. 调 write-story（传 scene、intents=从new-turn复制的内容、direction=剧情要点、上轮叙事）→ 得到正史
 5. 把正史输出给用户，并追加到 story-log.md
 6. 判断是否自动推进下一轮（参考大纲）或等待用户输入
 

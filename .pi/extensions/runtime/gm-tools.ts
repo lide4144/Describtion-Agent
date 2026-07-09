@@ -242,15 +242,13 @@ export function registerGmTools(
     promptSnippet: "根据意图和方向写出正史叙事",
     parameters: Type.Object({
       scene: Type.String({ description: "当前场景描述" }),
+      intents: Type.String({ description: "角色意图文本（从 new-turn 结果复制）" }),
       direction: Type.String({ description: "剧情要点——结构化列出本轮要推进的内容" }),
       previousNarrative: Type.Optional(Type.String({ description: "上一轮完整叙事，用于衔接" })),
       judgment: Type.Optional(Type.String({ description: "冲突仲裁结果（如有）" })),
     }),
 
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
-      // 从 details 中获取最近的 intents
-      // 由于 tool 调用是独立的，GM 需要在 direction 中包含角色意图
-
       const storyDir = path.join(storiesDir, storyName);
       let style = "";
       const gmPath = path.join(storyDir, "gm.yaml");
@@ -258,10 +256,9 @@ export function registerGmTools(
         try { style = JSON.parse(fs.readFileSync(gmPath, "utf-8")).narrative?.style || ""; } catch { /* */ }
       }
 
-      // 解析 direction 中嵌入的角色意图
+      // 解析意图文本
       const intentLines: Array<{ char: string; type: string; content: string }> = [];
-      const dirLines = params.direction.split("\n");
-      for (const line of dirLines) {
+      for (const line of params.intents.split("\n").filter(Boolean)) {
         const m = line.match(/^\[(.+?)\]\s*(\w+):\s*(.+)/);
         if (m) intentLines.push({ char: m[1], type: m[2], content: m[3] });
       }
