@@ -4,6 +4,11 @@
  * 每个角色启动一个持久的 pi RPC 子进程，避免每次 new-turn 冷启动。
  * 角色进程在 startCharacterSession 时启动，stopCharacterSession 时终止。
  * 通过 stdin/stdout JSONL 通信（pi RPC 协议）。
+ *
+ * Nocturne Memory 集成：
+ * - 启动时导入 blueprint memoryTree 到角色的 Nocturne namespace
+ * - system prompt 注入 boot 记忆
+ * - pi RPC 子进程加载 memory-tools 扩展，角色可调用 recall/memorize 工具
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
@@ -11,6 +16,10 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
 import { createInterface } from "node:readline";
+import { initCharacterMemory, fetchBootMemories } from "../memory-tools/index.ts";
+
+/** 相对于本文件的 memory-tools 扩展路径 */
+const MEMORY_TOOLS_EXT = path.resolve(import.meta.dirname, "../memory-tools/index.ts");
 
 export interface CharacterSession {
   name: string;
@@ -44,13 +53,17 @@ function loadBlueprint(storyDir: string, charName: string): any | null {
   return null;
 }
 
-function buildSystemPrompt(blueprint: any): string {
+function buildSystemPrompt(blueprint: any, bootMemoriesText?: string): string {
   const parts: string[] = [];
   if (blueprint.identity) parts.push(blueprint.identity);
   if (blueprint.preamble) parts.push(`\n${blueprint.preamble}`);
   if (blueprint.behavior) parts.push(`\n${blueprint.behavior}`);
 
-  if (blueprint.memoryTree) {
+  // 注入 Nocturne Memory boot 记忆（比静态 memoryTree 更完整）
+  if (bootMemoriesText) {
+    parts.push("\n" + bootMemoriesText);
+  } else if (blueprint.memoryTree) {
+    // 降级：如果没有 Nocturne Memory，用 blueprint 的静态 memoryTree
     const tree = typeof blueprint.memoryTree === "string"
       ? JSON.parse(blueprint.memoryTree)
       : blueprint.memoryTree;
@@ -63,6 +76,28 @@ function buildSystemPrompt(blueprint: any): string {
       }
     }
   }
+
+  // 记忆工具说明（自然语言风格）
+  parts.push(`
+## 你能用的能力
+
+你可以回忆过去的事：
+  recall({ char: '你的名字', query: '关键词' })  — 搜索记忆
+  recall({ char: '你的名字', uri: 'core://relationships/某人' })  — 读取某段具体记忆
+  recall({ char: '你的名字' })  — 浏览记忆目录
+
+你可以记住新的事：
+  memorize({ char: '你的名字', content: '要记住的内容', path: '存放路径', priority: 重要程度 })  
+  — 路径如 relationships/远坂凛 或 events/今天发生的事
+  — 重要程度 0-10，越重要数字越大
+
+你可以浏览记忆结构：
+  memory-tree({ char: '你的名字' })  
+  memory-tree({ char: '你的名字', path: 'relationships' })
+
+当你需要回忆什么的时候，用 recall。
+当事情值得记住的时候，用 memorize。
+不用刻意记下每件事——只记那些对你的角色有意义的重要瞬间。`);
 
   parts.push(`
 角色规则：act（用「」说对白，动作不用引号）、thought（*内心想法*）、wait（等待）。
@@ -92,16 +127,37 @@ export async function startCharacterSession(
     charMap.delete(charName);
   }
 
-  // 预生成 system prompt 文件
-  const systemPrompt = buildSystemPrompt(blueprint);
+  // ── 初始化 Nocturne Memory ──────────────────────────────
+  if (blueprint.memoryTree) {
+    const treeObj = typeof blueprint.memoryTree === "string"
+      ? JSON.parse(blueprint.memoryTree)
+      : blueprint.memoryTree;
+    try {
+      await initCharacterMemory(charName, treeObj);
+    } catch (e: any) {
+      console.warn(`[NM] 初始化角色 ${charName} 记忆失败: ${e.message}`);
+    }
+  }
+
+  // ── 获取 boot 记忆 ───────────────────────────────────────
+  let bootMemoriesText: string | undefined;
+  try {
+    bootMemoriesText = await fetchBootMemories(charName);
+  } catch { /* Nocturne Memory 不可用 */ }
+
+  // ── 构建 system prompt ────────────────────────────────────
+  const systemPrompt = buildSystemPrompt(blueprint, bootMemoriesText);
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `char-${charName}-`));
   const promptFile = path.join(tmpDir, "system.md");
   fs.writeFileSync(promptFile, systemPrompt, "utf-8");
 
-  // spawn pi RPC 进程
+  // ── spawn pi RPC 进程（加载 memory-tools 扩展） ──────────
   const proc = spawn("pi", [
     "--mode", "rpc",
-    "--no-session", "-ne",
+    "--no-session",
+    "-e", MEMORY_TOOLS_EXT,
+    "--no-tools",
+    "--tools", "recall,memorize,memory-tree",
     "--append-system-prompt", promptFile,
   ], {
     cwd: process.cwd(),

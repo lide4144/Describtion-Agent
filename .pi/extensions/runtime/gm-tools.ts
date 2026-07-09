@@ -14,6 +14,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import * as os from "node:os";
 import { Type } from "typebox";
 import {
   type CharacterMap,
@@ -61,7 +62,7 @@ ${judgment ? `## 冲突仲裁\n${judgment}` : ""}
 
 请输出叙事。`;
 
-  const tmpDir = fs.mkdtempSync("/tmp/writer-");
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "writer-"));
   const promptFile = path.join(tmpDir, "writer.md");
   fs.writeFileSync(promptFile, systemPrompt, "utf-8");
 
@@ -131,7 +132,7 @@ ${charSummaries.join("\n")}
 
   const input = `## 场景\n${scene}\n\n## 角色意图\n${intents.map(i => `[${i.char}] ${i.type}: ${i.content}`).join("\n")}`;
 
-  const tmpDir = fs.mkdtempSync("/tmp/judge-");
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "judge-"));
   const pf = path.join(tmpDir, "judge.md");
   fs.writeFileSync(pf, systemPrompt, "utf-8");
 

@@ -1,3 +1,6 @@
 [submodule "tavern-cards"]
 	path = tavern-cards
 	url = https://github.com/ai4rpg/tavern-cards.git
+[submodule "nocturne_memory"]
+	path = nocturne_memory
+	url = https://github.com/Dataojitori/nocturne_memory.git
