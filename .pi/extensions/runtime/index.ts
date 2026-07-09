@@ -53,16 +53,19 @@ function loadGmYaml(storyName: string): any {
 
 export default function (pi: ExtensionAPI) {
   // ================================================================
-  // /stories list
+  // /stories — 显示帮助
   // ================================================================
   pi.registerCommand("stories", {
-    description: "故事管理：list / play / stop / save / load / saves",
+    description: "故事管理命令",
     handler: async (_args, ctx) => {
-      ctx.ui.notify("请使用: /stories list, /stories play <name> 等子命令", "info");
+      ctx.ui.notify("可用命令:\n  /stories-list\n  /stories-play <故事名>\n  /stories-stop\n  /stories-save <存档名>\n  /stories-load <存档名>\n  /stories-saves", "info");
     },
   });
 
-  pi.registerCommand("stories list", {
+  // ================================================================
+  // /stories-list
+  // ================================================================
+  pi.registerCommand("stories-list", {
     description: "列出所有故事包",
     handler: async (_args, ctx) => {
       const index = loadIndex();
@@ -81,7 +84,7 @@ export default function (pi: ExtensionAPI) {
   // ================================================================
   // /stories play <name>
   // ================================================================
-  pi.registerCommand("stories play", {
+  pi.registerCommand("stories-play", {
     description: "进入故事的 GM 模式",
     handler: async (args, ctx) => {
       const storyName = args?.trim();
@@ -204,7 +207,7 @@ ${gmTone}${outlinePrompt}
   // ================================================================
   // /stories stop
   // ================================================================
-  pi.registerCommand("stories stop", {
+  pi.registerCommand("stories-stop", {
     description: "退出当前故事",
     handler: async (_args, ctx) => {
       if (!isGmMode || !activeStoryName) {
@@ -225,11 +228,11 @@ ${gmTone}${outlinePrompt}
   // ================================================================
   // /stories saves — 列出存档
   // ================================================================
-  pi.registerCommand("stories saves", {
+  pi.registerCommand("stories-saves", {
     description: "列出当前故事的存档",
     handler: async (_args, ctx) => {
       if (!activeStoryName) {
-        ctx.ui.notify("请先 /stories play <故事名>", "error");
+        ctx.ui.notify("请先 /stories-play <故事名>", "error");
         return;
       }
       ctx.ui.notify("存档功能待实现", "info");
@@ -237,13 +240,13 @@ ${gmTone}${outlinePrompt}
   });
 
   // ================================================================
-  // /stories save <name>
+  // /stories-save <name>
   // ================================================================
-  pi.registerCommand("stories save", {
+  pi.registerCommand("stories-save", {
     description: "保存存档",
     handler: async (_args, ctx) => {
       if (!activeStoryName) {
-        ctx.ui.notify("请先 /stories play <故事名>", "error");
+        ctx.ui.notify("请先 /stories-play <故事名>", "error");
         return;
       }
       ctx.ui.notify("存档功能待实现", "info");
@@ -251,13 +254,13 @@ ${gmTone}${outlinePrompt}
   });
 
   // ================================================================
-  // /stories load <name>
+  // /stories-load <name>
   // ================================================================
-  pi.registerCommand("stories load", {
+  pi.registerCommand("stories-load", {
     description: "读档",
     handler: async (_args, ctx) => {
       if (!activeStoryName) {
-        ctx.ui.notify("请先 /stories play <故事名>", "error");
+        ctx.ui.notify("请先 /stories-play <故事名>", "error");
         return;
       }
       ctx.ui.notify("读档功能待实现", "info");

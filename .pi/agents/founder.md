@@ -120,7 +120,7 @@ tools: import_tavern, save_story, save_character, read, write, bash
 
 ### 完成后通知用户
 
-保存完后告诉用户故事包已创建、包含多少角色，用户可以随时通过 `/stories play {storyName}` 游玩。
+保存完后告诉用户故事包已创建、包含多少角色，用户可以随时通过 `/stories-play {storyName}` 游玩。
 
 ## 重要原则
 
