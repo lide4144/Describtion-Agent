@@ -67,28 +67,17 @@ ${judgment ? `## 冲突仲裁\n${judgment}` : ""}
   fs.writeFileSync(promptFile, systemPrompt, "utf-8");
 
   const result = spawnSync("pi", [
-    "--mode", "json", "-p", "--no-session", "-ne",
+    "--mode", "text", "-p", "--no-session", "-ne",
     "--append-system-prompt", promptFile,
     "写",
   ], {
-    encoding: "utf-8", timeout: 30000, maxBuffer: 10 * 1024 * 1024,
+    encoding: "utf-8", timeout: 120000, maxBuffer: 50 * 1024 * 1024,
   });
 
   try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* */ }
 
-  const lines = (result.stdout || "").split("\n").filter(Boolean);
-  let lastText = "";
-  for (const line of lines) {
-    try {
-      const ev = JSON.parse(line);
-      if (ev.type === "message_end" && ev.message?.role === "assistant") {
-        const t = (ev.message.content || [])
-          .filter((c: any) => c.type === "text").map((c: any) => c.text).join("\n");
-        if (t) lastText = t;
-      }
-    } catch { /* */ }
-  }
-  return lastText.replace(/<think>[\s\S]*?<\/think>/g, "").trim() || "(写作 agent 未输出)";
+  const output = (result.stdout || "").trim();
+  return output || "(写作 agent 未输出)";
 }
 
 /**
@@ -136,23 +125,12 @@ ${charSummaries.join("\n")}
   const pf = path.join(tmpDir, "judge.md");
   fs.writeFileSync(pf, systemPrompt, "utf-8");
 
-  const r = spawnSync("pi", ["--mode","json","-p","--no-session","-ne","--append-system-prompt", pf, input], {
-    encoding: "utf-8", timeout: 30000, maxBuffer: 10 * 1024 * 1024,
+  const r = spawnSync("pi", ["--mode","text","-p","--no-session","-ne","--append-system-prompt", pf, input], {
+    encoding: "utf-8", timeout: 60000, maxBuffer: 10 * 1024 * 1024,
   });
   try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* */ }
 
-  const lines = (r.stdout || "").split("\n").filter(Boolean);
-  for (const line of lines) {
-    try {
-      const ev = JSON.parse(line);
-      if (ev.type === "message_end" && ev.message?.role === "assistant") {
-        const t = (ev.message.content || [])
-          .filter((c: any) => c.type === "text").map((c: any) => c.text).join("\n");
-        if (t) return t;
-      }
-    } catch { /* */ }
-  }
-  return "无冲突";
+  return (r.stdout || "").trim() || "无冲突";
 }
 
 export function registerGmTools(
