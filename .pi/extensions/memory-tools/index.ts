@@ -194,7 +194,7 @@ export default function (pi: ExtensionAPI) {
     label: "回忆",
     description: "回忆过去的事。搜索关键词或读取具体的记忆节点。不传参数时浏览记忆目录。",
     parameters: Type.Object({
-      char: Type.String({ description: "你的角色名" }),
+      char: Type.String({ description: "我的名字" }),
       query: Type.Optional(Type.String({ description: "搜索关键词——想起某个模糊的人或事" })),
       uri: Type.Optional(Type.String({ description: "具体的记忆 URI，如 core://relationships/远坂凛" })),
     }),
@@ -250,9 +250,9 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "memorize",
     label: "记住",
-    description: "记住新发生的事。写下你想记住的内容和分类路径。",
+    description: "记住新发生的事。写下我想记住的内容和分类路径。",
     parameters: Type.Object({
-      char: Type.String({ description: "你的角色名" }),
+      char: Type.String({ description: "我的名字" }),
       content: Type.String({ description: "要记住的内容——用第一人称写" }),
       path: Type.String({ description: "存放路径，如 relationships/远坂凛 或 events/今天的事" }),
       priority: Type.Optional(Type.Number({ description: "重要程度 0-10，默认 5" })),
@@ -280,9 +280,9 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "memory-tree",
     label: "记忆树",
-    description: "浏览你的记忆结构，查看有哪些分类和内容。",
+    description: "浏览我的记忆结构，查看有哪些分类和内容。",
     parameters: Type.Object({
-      char: Type.String({ description: "你的角色名" }),
+      char: Type.String({ description: "我的名字" }),
       path: Type.Optional(Type.String({ description: "从哪个路径开始，空=根目录" })),
     }),
 

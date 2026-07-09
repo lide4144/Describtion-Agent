@@ -79,25 +79,25 @@ function buildSystemPrompt(blueprint: any, bootMemoriesText?: string): string {
 
   // 记忆工具说明（自然语言风格）
   parts.push(`
-## 你能用的能力
+## 我能用的能力
 
-你可以回忆过去的事：
-  recall({ char: '你的名字', query: '关键词' })  — 搜索记忆
-  recall({ char: '你的名字', uri: 'core://relationships/某人' })  — 读取某段具体记忆
-  recall({ char: '你的名字' })  — 浏览记忆目录
+我可以回忆过去的事：
+  recall({ char: '我的名字', query: '关键词' })  — 搜索记忆
+  recall({ char: '我的名字', uri: 'core://relationships/某人' })  — 读取某段具体记忆
+  recall({ char: '我的名字' })  — 浏览记忆目录
 
-你可以记住新的事：
-  memorize({ char: '你的名字', content: '要记住的内容', path: '存放路径', priority: 重要程度 })  
+我可以记住新的事：
+  memorize({ char: '我的名字', content: '要记住的内容', path: '存放路径', priority: 重要程度 })  
   — 路径如 relationships/远坂凛 或 events/今天发生的事
   — 重要程度 0-10，越重要数字越大
 
-你可以浏览记忆结构：
-  memory-tree({ char: '你的名字' })  
-  memory-tree({ char: '你的名字', path: 'relationships' })
+我可以浏览记忆结构：
+  memory-tree({ char: '我的名字' })  
+  memory-tree({ char: '我的名字', path: 'relationships' })
 
-当你需要回忆什么的时候，用 recall。
+当我要回忆什么的时候，用 recall。
 当事情值得记住的时候，用 memorize。
-不用刻意记下每件事——只记那些对你的角色有意义的重要瞬间。`);
+不用刻意记下每件事——只记那些对我有意义的重要瞬间。`);
 
   parts.push(`
 角色规则：act（用「」说对白，动作不用引号）、thought（*内心想法*）、wait（等待）。
