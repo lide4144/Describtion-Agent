@@ -167,11 +167,15 @@ ${gmTone}${outlinePrompt}
 
 ## 工作流程
 1. 理解用户意图后，调 new-turn 广播场景
+   **重要：env 只描述当前这个瞬间，不要让角色汇报全天计划**
+   ✅ "凛放下筷子看了挂钟一眼"
+   ❌ "报一下今天的日程吧"
 2. 阅读角色返回的原始意图（new-turn 的输出就是 [角色名] act/thought: 内容）
 3. 如有冲突意图，调 judge 仲裁
 4. 调 write-story（传 scene、intents=从new-turn复制的内容、direction=剧情要点、上轮叙事）→ 得到正史
-5. 把正史输出给用户，并追加到 story-log.md
-6. 判断是否自动推进下一轮（参考大纲）或等待用户输入
+5. 把正史输出给用户
+6. 用 write 工具把纯叙事追加到 story-log.md（格式：## 第X轮\n\n叙事内容\n\n---）
+7. 判断是否自动推进下一轮（参考大纲）或等待用户输入
 
 ## 自动推进
 - write-story 返回后，你判断是否自动推进
@@ -180,7 +184,13 @@ ${gmTone}${outlinePrompt}
 - 用户说"继续"→ 恢复推进
 
 ## 故事日志
-每次拿到正史后，用 write 工具追加到 pi-characters/${storyName}/story-log.md`;
+story-log.md 只记录**净化版正史**——只有 write-story 输出的纯叙事，不包含工具调用过程、思考过程、错误信息。
+格式：
+## 第X轮
+
+叙事内容（纯文本，不加标题）
+
+---`;
 
       // 注入 GM 系统提示到当前会话
       pi.sendMessage({

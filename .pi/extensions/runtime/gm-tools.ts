@@ -66,7 +66,7 @@ ${judgment ? `## 冲突仲裁\n${judgment}` : ""}
   fs.writeFileSync(promptFile, systemPrompt, "utf-8");
 
   const result = spawnSync("pi", [
-    "--mode", "json", "-p", "--no-session",
+    "--mode", "json", "-p", "--no-session", "-ne",
     "--append-system-prompt", promptFile,
     "写",
   ], {
@@ -135,7 +135,7 @@ ${charSummaries.join("\n")}
   const pf = path.join(tmpDir, "judge.md");
   fs.writeFileSync(pf, systemPrompt, "utf-8");
 
-  const r = spawnSync("pi", ["--mode","json","-p","--no-session","--append-system-prompt", pf, input], {
+  const r = spawnSync("pi", ["--mode","json","-p","--no-session","-ne","--append-system-prompt", pf, input], {
     encoding: "utf-8", timeout: 30000, maxBuffer: 10 * 1024 * 1024,
   });
   try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* */ }

@@ -101,7 +101,7 @@ export async function startCharacterSession(
   // spawn pi RPC 进程
   const proc = spawn("pi", [
     "--mode", "rpc",
-    "--no-session",
+    "--no-session", "-ne",
     "--append-system-prompt", promptFile,
   ], {
     cwd: process.cwd(),
