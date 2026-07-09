@@ -5,8 +5,8 @@ pi-characters/
 .agents/
 skills-lock.json
 
-# 外部依赖（独立 git 仓库）
-/tavern-cards
+# 外部依赖（作为 git submodule 管理）
+# tavern-cards/ 是子模块，不由主仓库跟踪
 
 # 解包缓存
 fate-card-unpack/
