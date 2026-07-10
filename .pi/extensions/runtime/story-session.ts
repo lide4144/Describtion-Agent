@@ -205,9 +205,10 @@ function buildSystemPrompt(blueprint: any, bootMemoriesText?: string): string {
   memory-tree({ char: '我的名字' })  
   memory-tree({ char: '我的名字', path: 'relationships' })
 
-当我要回忆什么的时候，用 recall。
-当事情值得记住的时候，用 memorize。
-不用刻意记下每件事——只记那些对我有意义的重要瞬间。`);
+每次做完一件事、说过一段话之后，想想刚才的事值不值得记住。
+用 memorize 记下来——这是你唯一能留到以后的东西。
+系统会帮你自动记录基本行为，但你的视角和感受只有你自己能写。
+不用记每件小事——但如果你觉得某件事、某句话、某个瞬间对你重要，就记下来。`);
 
   parts.push(`
 角色规则：act（用「」说对白，动作不用引号）、thought（*内心想法*）、wait（等待）。
@@ -348,7 +349,7 @@ export async function startCharacterSession(
 export function characterAct(
   charSession: CharacterSession,
   envContent: string,
-  timeoutMs: number = 30000,
+  timeoutMs: number = 20000,
 ): Promise<string> {
   return new Promise((resolve, reject) => {
     if (!charSession.proc.stdin?.writable) {

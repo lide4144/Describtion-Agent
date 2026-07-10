@@ -10,14 +10,15 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { type CharacterSession, startCharacterSession, stopCharacterSession, stopAllSessions } from "./story-session.ts";
-import { registerGmTools, initDailyState } from "./gm-tools.ts";
-import { saveStory, loadStory, listSaves } from "./save-load.ts";
+import { registerGmTools, initDailyState, type GmToolState } from "./gm-tools.ts";
+import { saveStory, loadStory, listSaves, clearNamespace } from "./save-load.ts";
 
 const STORIES_DIR = path.resolve(import.meta.dirname, "../../../pi-characters");
 const INDEX_PATH = path.join(STORIES_DIR, "story-index.yaml");
 
 let activeStoryName: string | null = null;
 let activeCharacters: Map<string, CharacterSession> = new Map();
+const gmState: GmToolState = { storyName: null, activeCharacters: new Map() };
 let isGmMode = false;
 
 interface StoryIndex {
@@ -29,6 +30,45 @@ interface StoryIndex {
     status: string;
     description: string;
   }>;
+}
+
+/**
+ * 从 pi session JSONL 文件中提取最后 N 轮对话，格式化为 GM 可读的上下文。
+ * 这是纯函数，不依赖任何 pi API 或外部服务，可独立测试。
+ */
+function readSessionContext(sessionFilePath: string, maxPairs: number = 6): string {
+  if (!fs.existsSync(sessionFilePath)) return "";
+  const content = fs.readFileSync(sessionFilePath, "utf-8");
+  const messages: Array<{role: string; content: string}> = [];
+  for (const line of content.trim().split("\n").filter(Boolean)) {
+    try {
+      const entry = JSON.parse(line);
+      if (entry.type === "message" && entry.message?.role) {
+        const c = entry.message.content;
+        const text = typeof c === "string"
+          ? c
+          : Array.isArray(c)
+            ? c.filter((x: any) => x.type === "text").map((x: any) => x.text).join("\n")
+            : "";
+        if (text.trim()) messages.push({ role: entry.message.role, content: text.trim() });
+      }
+    } catch { /* skip malformed lines */ }
+  }
+  const lastPairs = messages.slice(-maxPairs * 2);
+  if (lastPairs.length < 2) return "";
+  let result = "\n\n## 上次会话记录\n以下是之前存档的最后几轮对话，帮你衔接上下文：\n\n";
+  for (let i = 0; i < lastPairs.length; i += 2) {
+    const userMsg = lastPairs[i];
+    const asstMsg = lastPairs[i + 1];
+    if (userMsg && userMsg.role === "user") {
+      result += `用户说：${userMsg.content.slice(0, 600)}\n\n`;
+      if (asstMsg && asstMsg.role === "assistant") {
+        const clean = asstMsg.content.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
+        if (clean) result += `你回复：${clean.slice(0, 1200)}\n\n`;
+      }
+    }
+  }
+  return result;
 }
 
 function loadIndex(): StoryIndex {
@@ -53,6 +93,9 @@ function loadGmYaml(storyName: string): any {
 }
 
 export default function (pi: ExtensionAPI) {
+  // GM 工具在扩展加载时注册（不是 /stories-play handler 内部），热重载后仍在
+  registerGmTools(pi, gmState, STORIES_DIR);
+
   // ================================================================
   // /stories — 显示帮助
   // ================================================================
@@ -88,7 +131,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerCommand("stories-play", {
     description: "进入故事的 GM 模式",
     handler: async (args, ctx) => {
-      const storyName = args?.trim();
+      const storyName = (args || "").trim();
       if (!storyName) {
         ctx.ui.notify("用法: /stories play <故事名>", "error");
         return;
@@ -110,8 +153,15 @@ export default function (pi: ExtensionAPI) {
       activeStoryName = storyName;
       isGmMode = true;
 
-      // 自动启动所有角色
+      // 清空旧记忆，从蓝图重新导入（play 就是新开始，load 才恢复）
       const charList = storyData.characters || [];
+      for (const c of charList) {
+        try {
+          await clearNamespace(c.name);
+        } catch { /* namespace 不存在时跳过 */ }
+      }
+
+      // 自动启动所有角色
       for (const c of charList) {
         try {
           await startCharacterSession(storyName, c.name, STORIES_DIR, activeCharacters);
@@ -120,8 +170,9 @@ export default function (pi: ExtensionAPI) {
         }
       }
 
-      // 注册 GM 工具
-      registerGmTools(pi, storyName, activeCharacters, STORIES_DIR);
+      // 更新 GM 工具状态（工具已在扩展加载时注册）
+      gmState.storyName = storyName;
+      gmState.activeCharacters = activeCharacters;
 
       // 构造 GM 系统提示 — 注入世界观、大纲、叙事风格
       const worldDesc = (storyData.world || "").slice(0, 2000);
@@ -167,7 +218,7 @@ ${gmTone}${outlinePrompt}
 - 用 write-story 工具产出正史叙事（纯叙事，不含思考/计划）
 - 用 observe 查看角色状态（不触发推理）
 - 用户是隐形的——角色不知道用户存在
-- 输出正史给用户，用 pi-characters/${storyName}/story-log.md 记录
+- 输出正史给用户，story-log.md 会自动记录
 
 ## 工作流程
 1. 理解用户意图后，调 new-turn 广播场景
@@ -178,8 +229,7 @@ ${gmTone}${outlinePrompt}
 3. 如有冲突意图，调 judge 仲裁
 4. 调 write-story（传 scene、intents=从new-turn复制的内容、direction=剧情要点、上轮叙事）→ 得到正史
 5. 把正史输出给用户
-6. 用 write 工具把纯叙事追加到 pi-characters/${storyName}/story-log.md（格式：## 第X轮\n\n叙事内容\n\n---）
-7. 判断是否自动推进下一轮（参考大纲）或等待用户输入
+6. 判断是否自动推进下一轮（参考大纲）或等待用户输入
 
 ## 自动推进
 - write-story 返回后，你判断是否自动推进
@@ -188,9 +238,9 @@ ${gmTone}${outlinePrompt}
 - 用户说"继续"→ 恢复推进
 
 ## 故事日志
-pi-characters/${storyName}/story-log.md 只记录**净化版正史**——只有 write-story 输出的纯叙事，不包含工具调用过程、思考过程、错误信息。
+pi-characters/${storyName}/story-log.md 由系统自动维护——每次 write-story 返回后自动追加纯叙事。
 格式：
-## 第X轮
+## 第N轮
 
 叙事内容（纯文本，不加标题）
 
@@ -233,6 +283,8 @@ pi-characters/${storyName}/story-log.md 只记录**净化版正史**——只有
       // 停止所有角色 session
       await stopAllSessions(activeCharacters);
       activeCharacters.clear();
+      gmState.storyName = null;
+      gmState.activeCharacters = new Map();
       isGmMode = false;
       activeStoryName = null;
 
@@ -288,6 +340,16 @@ pi-characters/${storyName}/story-log.md 只记录**净化版正史**——只有
           storiesDir: STORIES_DIR,
           activeCharacters,
         });
+
+        // 同时保存当前 pi 会话到存档目录（跨设备迁移用）
+        try {
+          const sessionFile = ctx.sessionManager.getSessionFile();
+          if (sessionFile && fs.existsSync(sessionFile)) {
+            const saveSessionPath = path.join(STORIES_DIR, activeStoryName, "saves", saveName, ".session.jsonl");
+            fs.copyFileSync(sessionFile, saveSessionPath);
+          }
+        } catch { /* 非关键操作 */ }
+
         ctx.ui.notify(
           `💾 已存档: ${saveName}\n` +
           `   角色: ${summary.characters.join(", ")}\n` +
@@ -324,37 +386,80 @@ pi-characters/${storyName}/story-log.md 只记录**净化版正史**——只有
         await stopAllSessions(activeCharacters);
         activeCharacters.clear();
 
-        // 2. 执行读档（恢复记忆 + story-log + 重启角色）
+        // 2. 执行读档（恢复记忆 + story-log），不重启角色（session switch 会杀进程）
         const summary = await loadStory({
           storyName: activeStoryName,
           saveName,
           storiesDir: STORIES_DIR,
           activeCharacters,
-          restartCharacter: async (name: string) => {
-            // 重新读取 story.yaml 注册角色
-            const storyPath = path.join(STORIES_DIR, activeStoryName!, "story.yaml");
-            let blueprint = `chars/${name}.yaml`;
-            if (fs.existsSync(storyPath)) {
-              try {
-                const story = JSON.parse(fs.readFileSync(storyPath, "utf-8"));
-                const entry = (story.characters || []).find((c: any) => c.name === name);
-                if (entry?.blueprint) blueprint = entry.blueprint;
-              } catch { /* */ }
-            }
-            await startCharacterSession(activeStoryName!, name, STORIES_DIR, activeCharacters);
-          },
+          restartCharacter: async () => {}, // no-op，角色在 withSession 中重启
         });
+
+        // 3. 切换 pi session 到存档中的会话文件
+        const saveSessionPath = path.join(STORIES_DIR, activeStoryName, "saves", saveName, ".session.jsonl");
+        const hasSession = fs.existsSync(saveSessionPath);
+
+        if (hasSession) {
+          await ctx.switchSession(saveSessionPath, {
+            withSession: async (newCtx) => {
+              // 重新启动角色 RPC 进程
+              const storyPath = path.join(STORIES_DIR, activeStoryName!, "story.yaml");
+              let charList: Array<{name: string}> = [];
+              if (fs.existsSync(storyPath)) {
+                try {
+                  const data = JSON.parse(fs.readFileSync(storyPath, "utf-8"));
+                  charList = data.characters || [];
+                } catch { /* */ }
+              }
+              for (const c of charList) {
+                try {
+                  await startCharacterSession(activeStoryName!, c.name, STORIES_DIR, activeCharacters);
+                } catch { /* */ }
+              }
+              gmState.storyName = activeStoryName;
+              gmState.activeCharacters = activeCharacters;
+
+              // 注入 GM 上下文
+              const storyData = loadStoryYaml(activeStoryName!);
+              const gmData = loadGmYaml(activeStoryName!);
+              const worldDesc = (storyData?.world || "").slice(0, 2000);
+              const gmStyle = gmData?.narrative?.style || "自然的叙事风格";
+              const gmTone = gmData?.narrative?.tone || "中立";
+              const outline = storyData?.outline || [];
+              let outlinePrompt = "";
+              if (outline.length > 0) {
+                outlinePrompt = "\n## 故事大纲\n";
+                for (const phase of outline) {
+                  outlinePrompt += `- ${phase.phase}：${phase.description}\n`;
+                  outlinePrompt += `  方向：${phase.direction}\n`;
+                  if (phase.scenes?.length) {
+                    outlinePrompt += `  场景：${phase.scenes.join(" → ")}\n`;
+                  }
+                }
+              }
+              const restoredPrompt = `你是这个故事的 GM。\n\n## 世界观\n${worldDesc}\n\n## 叙事风格\n${gmStyle}\n\n## 叙事基调\n${gmTone}${outlinePrompt}`;
+              await newCtx.sendMessage({
+                customType: "gm-context",
+                content: restoredPrompt,
+                display: false,
+              });
+            },
+          });
+        }
 
         ctx.ui.notify(
           `📂 已读档: ${saveName}\n` +
           `   角色: ${summary.characters.join(", ")}\n` +
           `   记忆: ${summary.nodeCount} 条恢复\n` +
-          `   故事日志: ${summary.storyLogRestored ? "已恢复" : "无"}`,
+          `   故事日志: ${summary.storyLogRestored ? "已恢复" : "无"}` +
+          (hasSession ? "\n   会话上下文: 已恢复" : ""),
           "info",
         );
       } catch (e: any) {
         ctx.ui.notify(`读档失败: ${e.message}`, "error");
         // 尝试重新启动角色（可能部分角色已恢复）
+        gmState.storyName = null;
+        gmState.activeCharacters = new Map();
         const storyPath = path.join(STORIES_DIR, activeStoryName, "story.yaml");
         if (fs.existsSync(storyPath)) {
           try {

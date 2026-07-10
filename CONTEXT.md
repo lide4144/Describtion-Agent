@@ -120,10 +120,11 @@ pi-characters/{story-name}/
 └── saves/
       运行时写入，非铸造师产出
       ├── {save-name}/          ← 命名存档目录
-      │   ├── snapshot.json     ← 记忆树 + state.json 快照
-      │   └── timestamp
-      ├── save-index.yaml       ← 存档清单（标签名 ←→ 路径映射）
-      └── ...                   存档在 pi session 树中对应一个标签节点
+      │   ├── charMemory/       ← 每个角色的记忆快照
+      │   ├── story-log.md      ← 正史备份
+      │   └── .session.jsonl    ← pi 会话文件（跨设备迁移用）
+      ├── save-index.yaml       ← 存档清单
+      └── ...
 
 story-index.yaml（故事注册表）
 stories:
@@ -151,18 +152,28 @@ stories:
 
 /stories save <name>  ← 保存到命名存档
                          ├── 暂停所有 agent（GM + 所有角色）
-                         ├── pi: 在当前 session 树节点打标签
-                         ├── 扩展: 导出所有角色的记忆树 + state.json 快照
+                         ├── 扩展: 导出所有角色的记忆树到 charMemory/
+                         ├── 扩展: 备份 story-log.md
+                         ├── 扩展: 复制当前 pi session 到 .session.jsonl
                          └── 通知用户已保存
 
 /stories load <name>  ← 读档
-                         ├── pi: 跳转到标签对应的树节点
-                         ├── 扩展: 恢复记忆树 + state.json
-                         ├── 通知用户已恢复
-                         └── GM: 给出存档时的场景摘要
+                         ├── 扩展: 恢复所有角色的记忆树
+                         ├── 扩展: 恢复 story-log.md
+                         ├── 扩展: 从 .session.jsonl 提取最后 6 轮对话
+                         │        注入到 GM 的 system prompt
+                         ├── 重启角色 session
+                         └── 通知用户已恢复
 
 /stories saves       ← 列出当前故事的所有存档标签
-/stories stop        ← 自动 save + 退出到故事列表
+/stories stop        ← 停止角色进程 + 退出（不自动 save）
+
+跨设备迁移流程：
+  设备 A: /stories save checkpoint
+           cp -r pi-characters/某故事 /U盘
+  设备 B: cp -r /U盘/某故事 pi-characters/
+          /stories play 某故事          → 全新开始
+          /stories load checkpoint   → 恢复记忆 + 会话上下文
 ```
 
 **上下文隔离的实现**：

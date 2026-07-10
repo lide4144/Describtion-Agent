@@ -78,6 +78,18 @@ ${judgment ? `## 冲突仲裁\n${judgment}` : ""}
 
   try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* */ }
 
+  // ponytail: 检查子进程错误——不检查就把失败当成功，看不到真实原因
+  if (result.error) {
+    return `(写作 agent 进程错误: ${result.error.message})`;
+  }
+  if (result.status !== 0) {
+    const stderr = (result.stderr || "").trim().slice(0, 500);
+    return `(写作 agent 退出码 ${result.status}${stderr ? ": " + stderr : ""})`;
+  }
+  if (result.signal) {
+    return `(写作 agent 被信号 ${result.signal} 终止)`;
+  }
+
   const output = (result.stdout || "").trim();
   return output || "(写作 agent 未输出)";
 }
@@ -99,8 +111,11 @@ function runJudge(
     try { worldDesc = (JSON.parse(fs.readFileSync(storyPath, "utf-8")).world || "").slice(0, 1000); } catch { /* */ }
   }
 
+  // ponytail: 只取当前有意图的角色，不遍历全部活跃角色
+  const intentNames = new Set(intents.map(i => i.char));
   const charSummaries: string[] = [];
   for (const [name, s] of activeCharacters) {
+    if (!intentNames.has(name)) continue;
     const bp = s.blueprint;
     const id = bp?.identity?.slice(0, 200) || "";
     const bh = bp?.behavior?.slice(0, 200) || "";
@@ -128,17 +143,118 @@ ${charSummaries.join("\n")}
   fs.writeFileSync(pf, systemPrompt, "utf-8");
 
   const r = spawnSync("pi", ["--mode","text","-p","--no-session","-ne","--append-system-prompt", pf, input], {
-    encoding: "utf-8", timeout: 60000, maxBuffer: 10 * 1024 * 1024,
+    encoding: "utf-8", timeout: 120000, maxBuffer: 50 * 1024 * 1024,
   });
   try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* */ }
+
+  if (r.error) {
+    return `(判定 agent 进程错误: ${r.error.message})`;
+  }
+  if (r.status !== 0) {
+    const stderr = (r.stderr || "").trim().slice(0, 500);
+    return `(判定 agent 退出码 ${r.status}${stderr ? ": " + stderr : ""})`;
+  }
+  if (r.signal) {
+    return `(判定 agent 被信号 ${r.signal} 终止)`;
+  }
 
   return (r.stdout || "").trim() || "无冲突";
 }
 
+/**
+ * 记忆整理 agent：读取本轮叙事 + 角色意图 + 现有记忆摘要，产出记忆操作指令。
+ * 每 5 轮运行一次。输出 JSON 数组，每项 { char, action, path, content, priority }。
+ */
+async function runConsolidator(
+  narrative: string,
+  intents: Array<{ char: string; type: string; content: string }>,
+  storyName: string,
+  storiesDir: string,
+): Promise<string> {
+  // 收集现有记忆摘要（最近 10 条 events + relationships）
+  let memorySummary = "";
+  const charNames = [...new Set(intents.map(i => i.char))];
+  for (const name of charNames) {
+    try {
+      const url = new URL(`${NM_BASE}/browse/node`);
+      url.searchParams.set("namespace", name);
+      url.searchParams.set("domain", "core");
+      url.searchParams.set("path", "");
+      const res = await fetch(url.toString());
+      if (res.ok) {
+        const data = await res.json();
+        const items: string[] = [];
+        // 从 children 中找出 events 和 relationships
+        for (const child of data.children || []) {
+          if (child.path === "events" || child.path === "relationships") {
+            try {
+              const sub = await (await fetch(new URL(`${NM_BASE}/browse/node?namespace=${name}&domain=core&path=${child.path}`))).json();
+              for (const c of sub.children || []) {
+                items.push(`  ${c.uri} (p=${c.priority}): ${(c.content_snippet || "").slice(0, 100)}`);
+              }
+            } catch { /* */ }
+          }
+        }
+        if (items.length > 0) {
+          memorySummary += `\n### ${name} 的记忆\n${items.slice(-10).join("\n")}\n`;
+        }
+      }
+    } catch { /* */ }
+  }
+
+  const systemPrompt = `你是一个**记忆管理 agent**。你的职责：阅读本轮叙事和角色意图，为角色创建和调整记忆。
+
+## 规则
+
+### 创建新记忆
+- **首次出现的新角色/NPC** → 记录到 relationships，优先级 6-7
+- **角色做了重要决定或行为** → 记录到 events，优先级 5-8（根据情感强度）
+- **角色观察到新信息/新发现** → 记录到 observations，优先级 4-5
+- **日常互动/平淡对话** → 记录到 events，优先级 2-3
+- **完全琐碎、无信息量的行为**（如走过走廊、拿起杯子）→ 不记录
+
+### 优先级调整（遗忘）
+- 一条记忆如果在最近 5 轮内没有新事件关联（同角色同主题出现），且当前优先级 <= 3 → 优先级 -1
+- 优先级降到 0 的记忆 → 标记删除
+- 新信息与旧信息矛盾/覆盖 → 更新旧内容
+
+### 输出格式
+必须是合法的 JSON 数组：\n[ { "char": "角色名", "action": "create"|"update"|"delete", "path": "events/xxx", "content": "内容", "priority": 5 } ]
+只输出 JSON，不要额外文字。
+
+## 本轮叙事\n${(narrative || "").slice(0, 3000)}\n\n## 角色意图\n${intents.map(i => `[${i.char}] ${i.type}: ${i.content.slice(0, 300)}`).join("\n")}\n\n## 现有记忆摘要${memorySummary || "\n（无现有记忆）"}`;
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "consolidate-"));
+  const pf = path.join(tmpDir, "consolidate.md");
+  fs.writeFileSync(pf, systemPrompt, "utf-8");
+
+  const result = spawnSync("pi", ["--mode","text","-p","--no-session","-ne","--append-system-prompt", pf, "整理记忆"], {
+    encoding: "utf-8", timeout: 60000, maxBuffer: 10 * 1024 * 1024,
+  });
+  try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch { /* */ }
+
+  if (result.error) {
+    return `(记忆 agent 进程错误: ${result.error.message})`;
+  }
+  if (result.status !== 0) {
+    const stderr = (result.stderr || "").trim().slice(0, 500);
+    return `(记忆 agent 退出码 ${result.status}${stderr ? ": " + stderr : ""})`;
+  }
+  if (result.signal) {
+    return `(记忆 agent 被信号 ${result.signal} 终止)`;
+  }
+
+  return (result.stdout || "").trim() || "[]";
+}
+
+export interface GmToolState {
+  storyName: string | null;
+  activeCharacters: CharacterMap;
+}
+
 export function registerGmTools(
   pi: ExtensionAPI,
-  storyName: string,
-  activeCharacters: CharacterMap,
+  state: GmToolState,
   storiesDir: string,
 ) {
   // ================================================================
@@ -157,6 +273,9 @@ export function registerGmTools(
     }),
 
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+      const { activeCharacters } = state;
+      const storyName = state.storyName;
+      if (!storyName) return { content: [{ type: "text", text: "请先 /stories-play 进入故事" }], details: {}, isError: true };
       if (activeCharacters.size === 0) {
         return { content: [{ type: "text", text: "没有活跃角色。请先用 start-char 启动角色。" }], details: {}, isError: true };
       }
@@ -165,18 +284,23 @@ export function registerGmTools(
         ? params.targets
         : Array.from(activeCharacters.keys());
 
-      // 并发收集意图
+      // 分批收集意图（一次最多 3 个，避免打爆 provider）
       const results: Array<{ char: string; type: string; content: string }> = [];
-      await Promise.all(targets.map(async (name) => {
-        const s = activeCharacters.get(name);
-        if (!s) { results.push({ char: name, type: "error", content: "未启动" }); return; }
-        try {
-          const r = await characterAct(s, params.content);
-          results.push({ char: name, type: inferResponseType(r), content: r });
-        } catch (e: any) {
-          results.push({ char: name, type: "error", content: e.message });
-        }
-      }));
+      const BATCH_SIZE = 3;
+      for (let i = 0; i < targets.length; i += BATCH_SIZE) {
+        const batch = targets.slice(i, i + BATCH_SIZE);
+        await Promise.all(batch.map(async (name) => {
+          const s = activeCharacters.get(name);
+          if (!s) { results.push({ char: name, type: "error", content: "未启动" }); return; }
+          try {
+            const r = await characterAct(s, params.content);
+            const type = inferResponseType(r);
+            results.push({ char: name, type, content: r });
+          } catch (e: any) {
+            results.push({ char: name, type: "error", content: e.message });
+          }
+        }));
+      }
 
       return {
         content: [{ type: "text", text: results.map(r =>
@@ -199,6 +323,9 @@ export function registerGmTools(
     }),
 
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+      const { activeCharacters } = state;
+      const storyName = state.storyName;
+      if (!storyName) return { content: [{ type: "text", text: "请先 /stories-play 进入故事" }], details: {}, isError: true };
       const intents = params.intents.split("\n").filter(Boolean).map(line => {
         const m = line.match(/^\[(.+?)\]\s*(\w+):\s*(.+)/);
         if (m) return { char: m[1], type: m[2], content: m[3] };
@@ -230,6 +357,8 @@ export function registerGmTools(
     }),
 
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+      const storyName = state.storyName;
+      if (!storyName) return { content: [{ type: "text", text: "请先 /stories-play 进入故事" }], details: {}, isError: true };
       const storyDir = path.join(storiesDir, storyName);
       let style = "";
       const gmPath = path.join(storyDir, "gm.yaml");
@@ -265,6 +394,58 @@ export function registerGmTools(
         params.judgment || "",
       );
 
+      // 自动追加到 story-log.md（纯正史，用户最终读的小说文本）
+      let roundNum = 0;
+      if (narrative && !narrative.startsWith("(写作 agent")) {
+        try {
+          const logPath = path.join(storyDir, "story-log.md");
+          const existing = fs.existsSync(logPath) ? fs.readFileSync(logPath, "utf-8").trim() : "";
+          const sectionCount = existing ? (existing.match(/^## /gm) || []).length : 0;
+          roundNum = sectionCount + 1;
+          const entry = `${existing ? existing + "\n\n" : ""}## 第${roundNum}轮\n\n${narrative}\n\n---`;
+          fs.writeFileSync(logPath, entry, "utf-8");
+        } catch { /* 非关键操作，写失败不影响返回 */ }
+      }
+
+      // 每 5 轮自动整理记忆
+      if (roundNum > 0 && roundNum % 5 === 0 && intentLines.length > 0) {
+        try {
+          const opsJson = await runConsolidator(narrative, intentLines, storyName, storiesDir);
+          let ops: Array<{char: string; action: string; path: string; content: string; priority: number}> = [];
+          try { ops = JSON.parse(opsJson); } catch { /* 非 JSON 输出则跳过 */ }
+          for (const op of ops) {
+            try {
+              if (op.action === "create" && op.char && op.path && op.content) {
+                const segs = op.path.split("/");
+                const title = segs.pop() || "untitled";
+                const parent = segs.join("/");
+                await nmPost(op.char, parent, op.content.slice(0, 500), Math.min(10, Math.max(0, op.priority || 3)), title, "core");
+              } else if (op.action === "update" && op.char && op.path) {
+                // 优先级调整（遗忘）通过 NM API 的 PUT 实现
+                const url = new URL(`${NM_BASE}/browse/node`);
+                url.searchParams.set("namespace", op.char);
+                url.searchParams.set("domain", "core");
+                url.searchParams.set("path", op.path);
+                await fetch(url.toString(), {
+                  method: "PUT",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({
+                    content: op.content ? op.content.slice(0, 500) : undefined,
+                    priority: op.priority !== undefined ? Math.min(10, Math.max(0, op.priority)) : undefined,
+                  }),
+                });
+              } else if (op.action === "delete" && op.char && op.path) {
+                const url = new URL(`${NM_BASE}/browse/node`);
+                url.searchParams.set("namespace", op.char);
+                url.searchParams.set("domain", "core");
+                url.searchParams.set("path", op.path);
+                await fetch(url.toString(), { method: "DELETE" });
+              }
+            } catch { /* 单条操作失败不影响后续 */ }
+          }
+        } catch { /* 记忆整理失败不影响主流程 */ }
+      }
+
       return {
         content: [{ type: "text", text: narrative }],
         details: { type: "narrative", narrative, style },
@@ -281,6 +462,9 @@ export function registerGmTools(
     description: "启动故事的某个角色。",
     parameters: Type.Object({ name: Type.String({ description: "角色名" }) }),
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+      const { activeCharacters } = state;
+      const storyName = state.storyName;
+      if (!storyName) return { content: [{ type: "text", text: "请先 /stories-play 进入故事" }], details: {}, isError: true };
       try {
         await startCharacterSession(storyName, params.name, storiesDir, activeCharacters);
         return { content: [{ type: "text", text: `角色 "${params.name}" 已启动` }], details: { type: "char_started", name: params.name } };
@@ -299,6 +483,7 @@ export function registerGmTools(
     description: "查看角色的最新状态（最近一次响应）。只读，不触发推理。",
     parameters: Type.Object({ char: Type.String({ description: "角色名" }) }),
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+      const { activeCharacters } = state;
       const s = activeCharacters.get(params.char);
       if (!s) return { content: [{ type: "text", text: `角色 "${params.char}" 未启动` }], details: {}, isError: true };
       return {
@@ -317,6 +502,7 @@ export function registerGmTools(
     description: "停止某个角色。",
     parameters: Type.Object({ name: Type.String({ description: "角色名" }) }),
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+      const { activeCharacters } = state;
       const s = activeCharacters.get(params.name);
       if (!s) return { content: [{ type: "text", text: `角色 "${params.name}" 未启动` }], details: {}, isError: true };
       stopCharacterSession(s);
@@ -334,12 +520,15 @@ export function registerGmTools(
     description: "list（列出活跃角色）| status（当前故事状态）",
     parameters: Type.Object({ action: Type.String({ description: "list | status" }) }),
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+      const { activeCharacters } = state;
+      const storyName = state.storyName;
       if (params.action === "list") {
         const chars = Array.from(activeCharacters.keys());
         if (chars.length === 0) return { content: [{ type: "text", text: "没有活跃角色" }], details: {} };
         return { content: [{ type: "text", text: `活跃角色 (${chars.length}):\n${chars.map(c => `  - ${c}`).join("\n")}` }], details: {} };
       }
       if (params.action === "status") {
+        if (!storyName) return { content: [{ type: "text", text: "没有活跃故事" }], details: {} };
         return { content: [{ type: "text", text: `故事: ${storyName}\n活跃角色: ${activeCharacters.size}` }], details: {} };
       }
       return { content: [{ type: "text", text: `未知操作: ${params.action}` }], details: {}, isError: true };
@@ -347,13 +536,13 @@ export function registerGmTools(
   });
 
   // 注册 archive-scene 工具
-  registerArchiveScene(pi, storyName, storiesDir);
+  registerArchiveScene(pi, state, storiesDir);
 
   // 注册 fixer 工具
-  registerFixer(pi, storyName, storiesDir, activeCharacters);
+  registerFixer(pi, state, storiesDir);
 
   // 注册每日模式工具
-  registerDailyTools(pi, storyName, storiesDir, activeCharacters);
+  registerDailyTools(pi, state, storiesDir);
 }
 
 // 每日模式状态（模块级变量）
@@ -373,9 +562,8 @@ export function getDailyState(): DailyState | null {
 
 function registerDailyTools(
   pi: ExtensionAPI,
-  storyName: string,
+  state: GmToolState,
   storiesDir: string,
-  activeCharacters: CharacterMap,
 ) {
   // daily-start
   pi.registerTool({
@@ -387,6 +575,7 @@ function registerDailyTools(
     }),
 
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+      const { activeCharacters } = state;
       if (!_dailyState) {
         return { content: [{ type: "text", text: "请先 /stories-play 进入故事" }], details: {}, isError: true };
       }
@@ -418,6 +607,7 @@ function registerDailyTools(
     parameters: Type.Object({}),
 
     async execute(_toolCallId, _params, _signal, _onUpdate, _ctx) {
+      const { activeCharacters } = state;
       if (!_dailyState || !_dailyState.active) {
         return { content: [{ type: "text", text: "请先用 daily-start 启动每日模式" }], details: {}, isError: true };
       }
@@ -477,6 +667,7 @@ function registerDailyTools(
     parameters: Type.Object({}),
 
     async execute(_toolCallId, _params, _signal, _onUpdate, _ctx) {
+      const { activeCharacters } = state;
       if (!_dailyState) {
         return { content: [{ type: "text", text: "每日模式未初始化" }], details: {}, isError: true };
       }
@@ -531,7 +722,7 @@ async function nmPost(
 /**
  * 注册 archive-scene 工具
  */
-function registerArchiveScene(pi: ExtensionAPI, storyName: string, storiesDir: string) {
+function registerArchiveScene(pi: ExtensionAPI, _state: GmToolState, storiesDir: string) {
   pi.registerTool({
     name: "archive-scene",
     label: "Archive Scene",
@@ -573,15 +764,8 @@ function registerArchiveScene(pi: ExtensionAPI, storyName: string, storiesDir: s
           archiveCount++;
         }
 
-        // 同步写入 story-log.md
-        const logPath = path.join(storiesDir, storyName, "story-log.md");
-        try {
-          const roundHeader = `\n\n## ${safeName}\n\n`;
-          fs.appendFileSync(logPath, roundHeader + params.narrative + "\n\n---", "utf-8");
-        } catch { /* story-log.md 不可写时跳过 */ }
-
         return {
-          content: [{ type: "text", text: `📦 场景已归档: ${safeName}\n   角色: ${charNames.join(", ")}\n   History: 写入 ${archiveCount} 个角色\n   Story-log: 已追加` }],
+          content: [{ type: "text", text: `📦 场景已归档: ${safeName}\n   角色: ${charNames.join(", ")}\n   History: 写入 ${archiveCount} 个角色` }],
           details: { type: "scene_archived", sceneName: safeName, characters: charNames },
         };
       } catch (e: any) {
@@ -615,9 +799,8 @@ function parseStoryLogSections(content: string): Array<{index: number; header: s
  */
 function registerFixer(
   pi: ExtensionAPI,
-  storyName: string,
+  state: GmToolState,
   storiesDir: string,
-  activeCharacters: CharacterMap,
 ) {
   pi.registerTool({
     name: "fixer",
@@ -635,10 +818,12 @@ function registerFixer(
     }),
 
     async execute(_toolCallId, params, _signal, _onUpdate, _ctx) {
+      const storyName = state.storyName;
       const action = params.action.trim();
 
       // ── log 子命令 ─────────────────────────────────────
       if (action.startsWith("log ")) {
+        if (!storyName) return { content: [{ type: "text", text: "没有活跃故事" }], details: {}, isError: true };
         return handleLogAction(action, storyName, storiesDir);
       }
 
