@@ -15,6 +15,7 @@
     ├── {story-name}/
     │   ├── story.yaml       ← 共享世界观 + 角色名单
     │   ├── gm.yaml          ← GM 叙事风格 + NPC 配置
+    │   ├── story-log.md     ← GM 书写的正史叙事
     │   ├── chars/
     │   │   ├── 卫宫士郎.yaml   ← 角色蓝图（铸造师产出）
     │   │   └── user.yaml     ← 用户自角色（可选，铸造师产出）
@@ -29,11 +30,11 @@
   │  只跟 GM 对话
   ▼
 GM（AI agent，加载 gm.yaml 启动）
-  │  理解用户意图 → 布置场景 → 启动角色 agent
-  │  发出 env 旁白 → 观察角色行动 → 呈现给你
+  │  理解用户意图 → new-turn 广播场景 → write-story 产正史
+  │  呈现叙事 → 判断推进或等待
   ▼
-角色 agent(s)
-  │  自主行动（act/observe/wait/recall/memorize）
+角色(s) RPC 进程
+  │  recall/memorize/memory-tree（自主管理记忆）
   │  不知道自己被「观看」，认为生活就是生活
   ▼
 用户（可选：给 GM 微调意见）
@@ -100,6 +101,8 @@ pi-characters/{story-name}/
 │     sceneDefaults:
 │       time: "day"
 │
+├── story-log.md         ← GM 每次 write-story 后追加的净化版正史
+│
 ├── chars/
 │     每个角色的独立蓝图（铸造师产出）
 │     ├── 卫宫士郎.yaml
@@ -107,7 +110,7 @@ pi-characters/{story-name}/
 │     │   preamble: [{user: ..., assistant: ...}]（破限对话）
 │     │   memoryTree: {identity/relationships/events/locations/world}
 │     │   behavior: "我怎么做……"（自然语言行为指引）
-│     │   tools: {stage: [...], ...}（工具覆盖/定制）
+│     │   toolOverrides: {...}（工具说明覆盖，可选）
 │     │   thinkingFormat: {enabled, template}
 │     │
 │     └── user.yaml
@@ -206,7 +209,9 @@ _Avoid_: 信息共享、统一知识库
 GM 安排的场景，多个角色在共享场景中实时共存，配有环境旁白、打断机制、自主行动循环。
 
 **日常模式 (Daily Mode)**:
-角色独立生活的运行模式，有自主的生活 agenda，不阻塞等待。
+GM 驱动的子模式，时间自动推进，角色自主行动。GM 退后观察，不精控叙事。
+可与舞台模式随时切换：白天用 daily 让角色生活，关键场景切舞台精控。
+  *已实现*：`/daily start` / `stop` / `status` / `tick`
 
 ## 记忆系统
 
@@ -231,6 +236,8 @@ GM 写的场景归档域名。
 
 ## 工具（运行时侧）
 
-**GM 工具**：`env`（环境旁白）、`archive-scene`（场景归档）、`console`（维护）、`fixer`（日志修复）
-**角色工具**：`act`、`observe`、`wait`、`recall`、`memorize`、`memory-edit`、`memory-tree`
-**启动器工具**：`stories-list`、`stories-play`、`stories-save`、`stories-load`、`stories-stop`
+**GM 工具**（已实现）：`new-turn`、`write-story`、`judge`、`start-char`、`observe`、`stop-char`、`console`、`archive-scene`、`fixer`、`daily-start`、`daily-tick`、`daily-stop`、`daily-status`
+
+**角色工具**（已实现）：`recall`（回忆）、`memorize`（记住）、`memory-tree`（浏览记忆树）、`memory-edit`（编辑已有记忆）
+
+**启动器工具**（已实现）：`stories-list`、`stories-play`、`stories-stop`、`stories-save`、`stories-load`、`stories-saves`

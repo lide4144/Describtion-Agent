@@ -276,7 +276,7 @@ WEOF
 WIEOF
 
   local output
-  output=$(timeout 20 pi --mode json -p --no-session -ne \
+  output=$(timeout 20 pi --mode text -p --no-session -ne \
     --append-system-prompt "${tmpdir}/writer-prompt.md" \
     "$(cat "${tmpdir}/writer-input.md")" 2>/dev/null || echo "")
 
@@ -287,21 +287,7 @@ WIEOF
   fi
 
   local narrative
-  narrative=$(echo "$output" | python3 -c "
-import json, sys
-for line in sys.stdin:
-    line = line.strip()
-    if not line: continue
-    try:
-        ev = json.loads(line)
-        if ev.get('type') == 'message_end' and ev.get('message',{}).get('role') == 'assistant':
-            content = ev['message'].get('content', [])
-            for c in content:
-                if c.get('type') == 'text':
-                    print(c['text'][:500])
-                    break
-    except: pass
-" 2>/dev/null)
+  narrative=$(echo "$output" | head -c 500)
 
   if [[ -n "$narrative" ]]; then
     echo "  叙事: ${narrative:0:80}..."

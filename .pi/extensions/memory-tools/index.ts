@@ -2,7 +2,7 @@
  * Memory Tools Extension — 为角色子进程注册 recall / memorize / memory-tree 工具
  *
  * 加载方式: pi --mode rpc -e .pi/extensions/memory-tools/index.ts --no-tools
- *   --tools recall,memorize,memory-tree
+ *   --tools recall,memorize,memory-edit,memory-tree
  *
  * 所有代码内联在此文件，避免 pi 扩展加载器的 TS 模块解析问题。
  */
@@ -63,6 +63,23 @@ async function fnCreateNode(namespace: string, parentPath: string, content: stri
     domain: "core",
     disclosure: "public",
   });
+}
+
+/** 更新记忆节点（内容和/或优先级） */
+async function fnUpdateNode(
+  namespace: string,
+  domain: string,
+  path: string,
+  content?: string,
+  priority?: number,
+): Promise<{ success: boolean; memory_id?: string }> {
+  const body: Record<string, unknown> = {};
+  if (content !== undefined) body.content = content;
+  if (priority !== undefined) body.priority = priority;
+  if (Object.keys(body).length === 0) {
+    throw new Error("没有要更新的字段");
+  }
+  return nmRequest("PUT", "/browse/node", { namespace, domain, path }, body);
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -144,35 +161,57 @@ export async function initCharacterMemory(
  * 获取角色的 boot 记忆文本（注入 system prompt 用）。
  */
 export async function fetchBootMemories(charName: string): Promise<string> {
+  const parts: string[] = [];
+
+  // ── 从 core 域读取长期记忆 ─────────────────────────
   try {
     const root = await fnReadNode(charName, "core", "");
-    const parts: string[] = [];
-
     for (const child of root.children) {
       try {
         const detail = await fnReadNode(charName, child.domain, child.path);
         if (detail.node.content) {
           const lines = [`## ${detail.node.uri}`, detail.node.content];
-          if (detail.children.length > 0) {
-            for (const sub of detail.children) {
-              try {
-                const subDetail = await fnReadNode(charName, sub.domain, sub.path);
-                if (subDetail.node.content) {
-                  lines.push(`\n### ${subDetail.node.name}`);
-                  lines.push(subDetail.node.content);
-                }
-              } catch { /* skip */ }
-            }
+          for (const sub of detail.children) {
+            try {
+              const subDetail = await fnReadNode(charName, sub.domain, sub.path);
+              if (subDetail.node.content) {
+                lines.push(`\n### ${subDetail.node.name}`);
+                lines.push(subDetail.node.content);
+              }
+            } catch { /* skip */ }
           }
           parts.push(lines.join("\n"));
         }
       } catch { /* skip */ }
     }
+  } catch { /* core 域不可用 */ }
 
-    return parts.length > 0 ? `## 我记住的事\n\n${parts.join("\n\n---\n\n")}` : "";
-  } catch {
-    return "";
-  }
+  // ── 从 history 域读取最近场景记忆 ─────────────────
+  try {
+    const historyRoot = await fnReadNode(charName, "history", "");
+    const historyParts: string[] = [];
+    for (const child of historyRoot.children) {
+      const detail = await fnReadNode(charName, child.domain, child.path);
+      // 读取分类节点（如 scenes）的子节点
+      for (const sub of detail.children) {
+        try {
+          const subDetail = await fnReadNode(charName, sub.domain, sub.path);
+          if (subDetail.node.content) {
+            historyParts.push(subDetail.node.content.slice(0, 400));
+          }
+        } catch { /* skip */ }
+      }
+      // 如果分类节点自身有内容也加上
+      if (detail.node.content) {
+        historyParts.push(detail.node.content.slice(0, 400));
+      }
+    }
+    if (historyParts.length > 0) {
+      parts.push(`## 最近的事\n\n${historyParts.join("\n")}`);
+    }
+  } catch { /* history 域不可用 */ }
+
+  return parts.length > 0 ? parts.join("\n\n---\n\n") : "";
 }
 
 // ════════════════════════════════════════════════════════════════════════════
@@ -276,6 +315,48 @@ export default function (pi: ExtensionAPI) {
 
   // ══════════════════════════════════════════════════════════════════════════
   // memory-tree — 浏览记忆树
+  // ══════════════════════════════════════════════════════════════════════════
+  // ══════════════════════════════════════════════════════════════════════════
+  // memory-edit — 编辑记忆
+  // ══════════════════════════════════════════════════════════════════════════
+  pi.registerTool({
+    name: "memory-edit",
+    label: "编辑记忆",
+    description: "更新已有记忆的内容或重要程度。需要提供记忆的 URI。",
+    parameters: Type.Object({
+      char: Type.String({ description: "我的名字" }),
+      uri: Type.String({ description: "要编辑的记忆 URI，如 core://relationships/远坂凛" }),
+      content: Type.Optional(Type.String({ description: "新的记忆内容（用第一人称写）。不传则不修改内容。" })),
+      priority: Type.Optional(Type.Number({ description: "新的重要程度 0-10。不传则不修改。" })),
+    }),
+
+    async execute(_id, params, _sig, _upd, _ctx) {
+      try {
+        const m = params.uri.match(/^([a-z][a-z0-9_]*):\/\/(.+)$/);
+        if (!m) throw new Error(`无效 URI: ${params.uri}`);
+        const domain = m[1];
+        const path = m[2];
+
+        await fnUpdateNode(
+          params.char,
+          domain,
+          path,
+          params.content,
+          params.priority,
+        );
+
+        const parts = [`✅ 已更新: ${params.uri}`];
+        if (params.content !== undefined) parts.push(`  新内容: ${params.content.slice(0, 100)}`);
+        if (params.priority !== undefined) parts.push(`  新优先级: ${params.priority}`);
+        return { content: [{ type: "text", text: parts.join("\n") }], details: { type: "memory_edit", uri: params.uri } };
+      } catch (e: any) {
+        return { content: [{ type: "text", text: `没改成功: ${e.message}` }], details: {}, isError: true };
+      }
+    },
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // memory-tree — 记忆树
   // ══════════════════════════════════════════════════════════════════════════
   pi.registerTool({
     name: "memory-tree",

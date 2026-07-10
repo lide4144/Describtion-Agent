@@ -15,6 +15,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as os from "node:os";
+import * as crypto from "node:crypto";
 import { createInterface } from "node:readline";
 import { initCharacterMemory, fetchBootMemories } from "../memory-tools/index.ts";
 
@@ -26,6 +27,8 @@ export interface CharacterSession {
   blueprint: any;
   lastResponse: string;
   promptFile: string;
+  /** session 文件路径（含 preamble 注入），无 preamble 时为 undefined */
+  sessionFile?: string;
   /** RPC 子进程 */
   proc: ChildProcess;
   /** 等待中的 response promise */
@@ -53,10 +56,117 @@ function loadBlueprint(storyDir: string, charName: string): any | null {
   return null;
 }
 
+/**
+ * 解析 preamble JSON 字符串为 {role, content}[]
+ */
+function parsePreamble(preambleJson: any): Array<{role: string; content: string}> {
+  if (!preambleJson) return [];
+  if (typeof preambleJson === "string") {
+    try {
+      const parsed = JSON.parse(preambleJson);
+      if (Array.isArray(parsed)) return parsed;
+      return [];
+    } catch {
+      return [];
+    }
+  }
+  if (Array.isArray(preambleJson)) return preambleJson;
+  return [];
+}
+
+/** 生成 8 字符十六进制 ID */
+function shortId(): string {
+  return crypto.randomBytes(4).toString("hex");
+}
+
+/**
+ * 生成 session 文件内容（JSONL 行数组），含 preamble 对话对
+ */
+function buildSessionLines(
+  preamblePairs: Array<{role: string; content: string}>,
+  cwd: string,
+): string[] {
+  const lines: string[] = [];
+  const sessionId = crypto.randomUUID();
+  const now = new Date().toISOString();
+
+  // Session header
+  lines.push(JSON.stringify({
+    type: "session",
+    version: 3,
+    id: sessionId,
+    timestamp: now,
+    cwd,
+  }));
+
+  // Preamble 消息对
+  let parentId: string | null = null;
+  for (let i = 0; i < preamblePairs.length; i += 2) {
+    const userMsg = preamblePairs[i];
+    const assistantMsg = preamblePairs[i + 1];
+
+    if (!userMsg || userMsg.role !== "user") continue;
+    if (!assistantMsg || assistantMsg.role !== "assistant") continue;
+
+    // User message
+    const userEntryId = shortId();
+    lines.push(JSON.stringify({
+      type: "message",
+      id: userEntryId,
+      parentId,
+      timestamp: now,
+      message: {
+        role: "user",
+        content: userMsg.content,
+        timestamp: Date.now(),
+      },
+    }));
+    parentId = userEntryId;
+
+    // Assistant message
+    const asstEntryId = shortId();
+    lines.push(JSON.stringify({
+      type: "message",
+      id: asstEntryId,
+      parentId,
+      timestamp: now,
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: assistantMsg.content }],
+        api: "preamble",
+        provider: "preamble",
+        model: "preamble",
+        usage: {
+          input: 0, output: 0,
+          cacheRead: 0, cacheWrite: 0,
+          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+        },
+        stopReason: "stop",
+        timestamp: Date.now(),
+      },
+    }));
+    parentId = asstEntryId;
+  }
+
+  return lines;
+}
+
+/**
+ * 写入 session 文件，返回文件路径
+ */
+function writeSessionFile(sessionDir: string, lines: string[]): string {
+  fs.mkdirSync(sessionDir, { recursive: true });
+  const filePath = path.join(sessionDir, "preamble.jsonl");
+  fs.writeFileSync(filePath, lines.join("\n") + "\n", "utf-8");
+  return filePath;
+}
+
+/**
+ * 构建 system prompt（不含 preamble——preamble 通过 session 文件注入）
+ */
 function buildSystemPrompt(blueprint: any, bootMemoriesText?: string): string {
   const parts: string[] = [];
   if (blueprint.identity) parts.push(blueprint.identity);
-  if (blueprint.preamble) parts.push(`\n${blueprint.preamble}`);
   if (blueprint.behavior) parts.push(`\n${blueprint.behavior}`);
 
   // 注入 Nocturne Memory boot 记忆（比静态 memoryTree 更完整）
@@ -145,21 +255,41 @@ export async function startCharacterSession(
     bootMemoriesText = await fetchBootMemories(charName);
   } catch { /* Nocturne Memory 不可用 */ }
 
-  // ── 构建 system prompt ────────────────────────────────────
+  // ── 解析 preamble ────────────────────────────────────────
+  const preamblePairs = parsePreamble(blueprint.preamble);
+
+  // ── 构建 system prompt（不含 preamble 文本） ────────────
   const systemPrompt = buildSystemPrompt(blueprint, bootMemoriesText);
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), `char-${charName}-`));
   const promptFile = path.join(tmpDir, "system.md");
   fs.writeFileSync(promptFile, systemPrompt, "utf-8");
 
-  // ── spawn pi RPC 进程（加载 memory-tools 扩展） ──────────
-  const proc = spawn("pi", [
+  // ── 如果有 preamble，创建 session 文件注入真实对话对 ────
+  let sessionFile: string | undefined;
+  if (preamblePairs.length >= 2) {
+    const sessionDir = path.join(tmpDir, "session");
+    const lines = buildSessionLines(preamblePairs, process.cwd());
+    sessionFile = writeSessionFile(sessionDir, lines);
+  }
+
+  // ── 构造 pi 启动参数 ──────────────────────────────────────
+  const piArgs: string[] = [
     "--mode", "rpc",
-    "--no-session",
     "-e", MEMORY_TOOLS_EXT,
     "--no-tools",
-    "--tools", "recall,memorize,memory-tree",
+    "--tools", "recall,memorize,memory-edit,memory-tree",
     "--append-system-prompt", promptFile,
-  ], {
+  ];
+  if (sessionFile) {
+    piArgs.push("--session", sessionFile);
+    // 用 --name 做标识方便调试
+    piArgs.push("--name", `char:${charName}`);
+  } else {
+    piArgs.push("--no-session");
+  }
+
+  // ── spawn pi RPC 进程（加载 memory-tools 扩展） ──────────
+  const proc = spawn("pi", piArgs, {
     cwd: process.cwd(),
     stdio: ["pipe", "pipe", "pipe"],
     shell: false,
@@ -170,6 +300,7 @@ export async function startCharacterSession(
     blueprint,
     lastResponse: "",
     promptFile,
+    sessionFile,
     proc,
     pendingResponse: null,
   };
@@ -244,7 +375,10 @@ export function characterAct(
 export function stopCharacterSession(charSession: CharacterSession): void {
   try {
     charSession.proc.kill();
-    fs.rmSync(path.dirname(charSession.promptFile), { recursive: true, force: true });
+    const tmpDir = path.dirname(charSession.promptFile);
+    if (fs.existsSync(tmpDir)) {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    }
   } catch { /* */ }
 }
 
